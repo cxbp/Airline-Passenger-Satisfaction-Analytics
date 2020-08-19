@@ -1,0 +1,878 @@
+---
+title: "Airline Passenger Satisfaction Analytics"
+author: 
+output:
+  word_document: default
+---
+
+#Description of the problem
+
+#We choose the Airline Passenger Satisfaction dataset from Kaggle.com. We would like to determine what kind of method can best predict the customers' satisfaction, find factors that can affect the level of customers’ satisfaction level on the flight and use the best model we selected to predict the satisfaction level of the customer.
+
+#Data source: https://www.kaggle.com/teejmahal20/airline-passenger-satisfaction
+#Data size: Train data: 12.2 MB, 103905 rows, 25 columns; Test data: 3 MB, 25977 rows, 25 columns
+#Variable information: Customer id, Customer type, flight information, evaluation on different aspects of the flight, satisfaction Level, etc. Predictors include both numerical and categorical data type. The response variable "satisfaction" is categorical data.
+
+#Preparation for analysis
+#In this part, we did data wrangling and checked the distribution for variables. 
+#We first removed rows with missing values from both original data sets. Then we removed the first two columns, sequence number and customer id. We checked distribution for numerical variables and categorical variables. Then the two columns "departure delay in mintues" and "arrival delay in minutes" are also removed from the two data set. We did the log transformation on flight distance. After that, we make the "satisfaction" column in both train and test sets as binary variable. Finally, we choose 25000 data from the training set as training data.
+
+
+#Load the required package
+```{r echo = FALSE}
+library(glmnet)
+library(dplyr)
+library(MASS)
+library(class)
+library(caret)
+library(e1071)
+library(rpart)# performing regression trees
+library(rpart.plot)
+library(randomForest)
+library(simEd)
+library(pROC)
+library(ROCR)
+library(mlr)
+library(ggplot2)
+library(tictoc)
+```
+
+#Read in the data set
+```{r echo = FALSE}
+train <- read.csv("https://dm-airline.s3.amazonaws.com/train.csv")
+test <- read.csv("https://dm-airline.s3.amazonaws.com/test.csv")
+```
+
+#Remove NA from both training and test sets
+```{r echo = FALSE}
+nrow(train)
+train<-na.omit(train)
+nrow(train)
+
+nrow(test)
+test<-na.omit(test)
+nrow(test)
+
+```
+
+#Remove the first two columns, sequence number and customer id, from both training and test sets because they have no influence on our analysis
+```{r echo = FALSE}
+train <- train[,-1]
+train <- train[,-1]
+test <- test[,-1]
+test <- test[,-1]
+```
+
+#Cheack the distribution of numeric predictors in training set
+```{r echo = FALSE}
+par(mfrow = c(3,3))
+hist(train$Age)
+hist(train$Flight.Distance)
+hist(train$Inflight.wifi.service)
+hist(train$Departure.Arrival.time.convenient)
+hist(train$Ease.of.Online.booking)
+hist(train$Gate.location)
+hist(train$Food.and.drink)
+hist(train$Online.boarding)
+hist(train$Seat.comfort)
+```
+
+```{r echo = FALSE}
+par(mfrow = c(3,3))
+hist(train$Inflight.entertainment)
+hist(train$On.board.service)
+hist(train$Leg.room.service)
+hist(train$Baggage.handling)
+hist(train$Checkin.service)
+hist(train$Inflight.service)
+hist(train$Cleanliness)
+hist(train$Departure.Delay.in.Minutes)
+hist(train$Arrival.Delay.in.Minutes)
+```
+#Check the distribution of categorical predictors in training set
+```{r echo = FALSE}
+par(mfrow = c(2,3))
+barplot(summary(train$Gender))
+barplot(summary(train$Customer.Type))
+barplot(summary(train$Type.of.Travel))
+barplot(summary(train$Class))
+barplot(summary(train$satisfaction))
+```
+
+#Check the distribution of numeric predictors in test set
+```{r echo = FALSE}
+par(mfrow = c(3,3))
+hist(test$Age)
+hist(test$Flight.Distance)
+hist(test$Inflight.wifi.service)
+hist(test$Departure.Arrival.time.convenient)
+hist(test$Ease.of.Online.booking)
+hist(test$Gate.location)
+hist(test$Food.and.drink)
+hist(test$Online.boarding)
+hist(test$Seat.comfort)
+```
+
+```{r echo = FALSE}
+par(mfrow = c(3,3))
+hist(test$Inflight.entertainment)
+hist(test$On.board.service)
+hist(test$Leg.room.service)
+hist(test$Baggage.handling)
+hist(test$Checkin.service)
+hist(test$Inflight.service)
+hist(test$Cleanliness)
+hist(test$Departure.Delay.in.Minutes)
+hist(test$Arrival.Delay.in.Minutes)
+```
+#Check the distribution of categorical predictors in test set
+```{r echo = FALSE}
+par(mfrow = c(2,3))
+barplot(summary(test$Gender))
+barplot(summary(test$Customer.Type))
+barplot(summary(test$Type.of.Travel))
+barplot(summary(test$Class))
+barplot(summary(test$satisfaction))
+```
+
+#We find that the distribution of flight distance, departure delay in mintues and arrival delay in minutes are all right-skewed in both sets.
+#But before we do the transformation, we first see whether the departure delay in mintues and arrival delay in minutes are correlated to satisfaction in both sets.
+```{r echo = FALSE}
+par(mfrow=c(2,2))
+boxplot(train$Departure.Delay.in.Minutes~train$satisfaction)
+boxplot(train$Arrival.Delay.in.Minutes~train$satisfaction)
+boxplot(test$Departure.Delay.in.Minutes~test$satisfaction)
+boxplot(test$Arrival.Delay.in.Minutes~test$satisfaction)
+```
+
+#From the result above, we find that there is no obvious correlation between the departure delay in mintues and satisfaction, and arrival delay in minutes and satisfaction respectively in both sets.Additionally, the the departure delay in mintues and arrival delay in minutes are highly correlated with rach other, which is also consistent with our commen sense. In case that we missed something, we only remove the departure delay in mintues from the dataset and keep the arrival delay in minutes as one of the predictors because we believe that maybe the arrival delay has more influence on people's feeling than the departure delay.
+
+#So we remove "Departure.Delay.in.Minutes".
+```{r echo = FALSE}
+train <- train[,-21]
+test <- test[,-21]
+```
+
+#To make the flight distance (nearly) normally distributed, we drop ten percent outliears and make a transformation on it.
+```{r}
+intq.lower = quantile(train$Flight.Distance,0.05)[[1]]
+intq.upper = quantile(train$Flight.Distance,0.95)[[1]]
+train <- train[which(train$Flight.Distance>=intq.lower),]
+train <- train[which(train$Flight.Distance<=intq.upper),]
+```
+
+
+#To make the flight distance (nearly) normally distributed, we try to use log transformation and squared root transformation.
+#Try the log transformation on flight distance
+```{r echo = FALSE}
+par(mfrow = c(1,2))
+hist(log(train$Flight.Distance + 1))
+hist(log(test$Flight.Distance + 1))
+```
+
+#Then we try square root transformation
+```{r echo = FALSE}
+par(mfrow = c(1,2))
+hist(sqrt(train$Flight.Distance))
+hist(sqrt(test$Flight.Distance))
+```
+
+
+#Comparing the histograms above, we decide to choose to do log transformation on flight distance because the range of the variable after log transformation is more close to other numeric variables. On the other hand, it is more close to normal distribution.
+```{r echo = FALSE}
+train$Flight.Distance <- log(train$Flight.Distance + 1)
+test$Flight.Distance <- log(test$Flight.Distance + 1)
+```
+
+#Make the "satisfaction" column in both training and test sets as binary variable
+```{r echo = FALSE}
+levels(train$satisfaction)[1] <- 0 #neutral or dissatisfied
+levels(train$satisfaction)[2] <- 1 #satisfied
+levels(test$satisfaction)[1] <- 0 #neutral or dissatisfied
+levels(test$satisfaction)[2] <- 1 #satisfied
+```
+
+#Considering the computing power, we choose 25000 data from the training set as training data.
+# ```{r echo = FALSE}
+# train <- train[1:50,]
+# nrow(train)
+# ```
+
+
+#Then we standardize the continuous features in the training and test data.
+```{r}
+train.std <- train
+train.std$Age <- scale(train.std$Age)
+train.std$Flight.Distance <- scale(train.std$Flight.Distance)
+train.std$Inflight.wifi.service <- scale(train.std$Inflight.wifi.service)
+train.std$Departure.Arrival.time.convenient <- scale(train.std$Departure.Arrival.time.convenient)
+train.std$Ease.of.Online.booking <- scale(train.std$Ease.of.Online.booking)
+train.std$Gate.location <- scale(train.std$Gate.location)
+train.std$Food.and.drink <- scale(train.std$Food.and.drink)
+train.std$Online.boarding <- scale(train.std$Online.boarding)
+train.std$Seat.comfort <- scale(train.std$Seat.comfort)
+train.std$Inflight.entertainment <- scale(train.std$Inflight.entertainment)
+train.std$On.board.service<- scale(train.std$On.board.service)
+train.std$Leg.room.service<- scale(train.std$Leg.room.service)
+train.std$Baggage.handling<- scale(train.std$Baggage.handling)
+train.std$Checkin.service<- scale(train.std$Checkin.service)
+train.std$Inflight.service <- scale(train.std$Inflight.service)
+train.std$Cleanliness<- scale(train.std$Cleanliness)
+train.std$Arrival.Delay.in.Minutes<- scale(train.std$Arrival.Delay.in.Minutes)
+
+
+
+
+test.std <- test
+test.std$Age <- scale(test.std$Age)
+test.std$Flight.Distance <- scale(test.std$Flight.Distance)
+test.std$Inflight.wifi.service <- scale(test.std$Inflight.wifi.service)
+test.std$Departure.Arrival.time.convenient <- scale(test.std$Departure.Arrival.time.convenient)
+test.std$Ease.of.Online.booking <- scale(test.std$Ease.of.Online.booking)
+test.std$Gate.location <- scale(test.std$Gate.location)
+test.std$Food.and.drink <- scale(test.std$Food.and.drink)
+test.std$Online.boarding <- scale(test.std$Online.boarding)
+test.std$Seat.comfort <- scale(test.std$Seat.comfort)
+test.std$Inflight.entertainment <- scale(test.std$Inflight.entertainment)
+test.std$On.board.service<- scale(test.std$On.board.service)
+test.std$Leg.room.service<- scale(test.std$Leg.room.service)
+test.std$Baggage.handling<- scale(test.std$Baggage.handling)
+test.std$Checkin.service<- scale(test.std$Checkin.service)
+test.std$Inflight.service <- scale(test.std$Inflight.service)
+test.std$Cleanliness<- scale(test.std$Cleanliness)
+test.std$Arrival.Delay.in.Minutes<- scale(test.std$Arrival.Delay.in.Minutes)
+```
+
+
+
+#Creat data matrix
+```{r echo = FALSE}
+x.train <- model.matrix(satisfaction ~.,train) #put regressors from training set into a matrix
+y.train <- train$satisfaction
+
+x.test <- model.matrix(satisfaction ~.,test) #put regressors from test set into a matrix
+y.test <- test$satisfaction 
+
+x.train.std <- model.matrix(satisfaction ~.,train.std)
+x.test.std <- model.matrix(satisfaction ~.,test.std)
+```
+
+
+
+
+
+
+#Part 3: Perform analyses
+#In this part, so far we did logistic regression, forward stepwise logistic regression, ridge logistic regression, lasso logistic regression and K-Nearest Neighbors (K-NN) algorithm. Then we compare the performance on all of them and finally choose to use 
+
+#1. Logistic regression
+```{r echo = FALSE}
+tic("model fitting")
+full.logit <- glm(satisfaction~., data = train, family = "binomial")
+toc()
+summary(full.logit)
+```
+#Create confusion matrix for training set and calculate training error
+```{r echo = FALSE}
+glm.probs=predict(full.logit,train,type="response") #make predictions
+glm.pred=rep(0,nrow(train))
+glm.pred[glm.probs > 0.5] = 1 #prediction accuracy
+table(glm.pred,train$satisfaction) #print confusion matrix
+glm.train.acc <- mean(glm.pred == train$satisfaction) #calculate Validation accuracy
+glm.train.acc
+```
+
+#Then we check whether the training error rate will decrease if we remove the nonsignificant feature, Flight.Distance, from the model.
+```{r}
+full.logit <- glm(satisfaction~.-Flight.Distance, data = train, family = "binomial")
+summary(full.logit)
+```
+
+
+#Create confusion matrix for training set and calculate Validation accuracy
+```{r echo = FALSE}
+glm.probs=predict(full.logit,train,type="response") #make predictions
+glm.pred=rep(0,nrow(train))
+glm.pred[glm.probs > 0.5] = 1 #prediction accuracy
+table(glm.pred,train$satisfaction) #print confusion matrix
+glm.train.acc <- mean(glm.pred == train$satisfaction) #calculate Validation accuracy
+glm.train.acc
+```
+#ROC and AUC
+```{r}
+modelroc_logi <- roc(train$satisfaction,as.numeric(glm.pred))
+plot(modelroc_logi, print.auc=TRUE, auc.polygon=TRUE, grid=c(0.1, 0.2),
+     grid.col=c("green", "red"), max.auc.polygon=TRUE,
+     auc.polygon.col="skyblue", print.thres=TRUE)
+```
+
+#Create confusion matrix for test set and calculate testing accuracy
+```{r echo = FALSE}
+glm.probs=predict(full.logit,test,type="response") #make predictions
+glm.pred=rep(0,nrow(test))
+glm.pred[glm.probs > 0.5] = 1 #prediction accuracy
+table(glm.pred,test$satisfaction) #print confusion matrix
+glm.test.acc <- mean(glm.pred == test$satisfaction) #calculate testing accuracy
+glm.test.acc
+```
+
+
+#2. Forward stepwise logistic regression
+```{r echo = FALSE}
+tic("model fitting")
+full.logit <- glm(satisfaction~., data = train, family = "binomial")
+null = glm(satisfaction~1, data=train, family="binomial")
+forward=step(null,direction="forward",scope=formula(full.logit))
+
+```
+#The flighT distance is also removed from the model.
+
+#Then we use selected model to forecast
+```{r echo = FALSE}
+forward.select=glm(satisfaction ~ Online.boarding + Type.of.Travel + On.board.service + 
+    Customer.Type + Checkin.service + Inflight.entertainment + 
+    Leg.room.service + Class + Inflight.wifi.service + Departure.Arrival.time.convenient + 
+    Cleanliness + Arrival.Delay.in.Minutes + Baggage.handling + 
+    Age + Ease.of.Online.booking + Inflight.service + Seat.comfort + 
+    Food.and.drink + Gate.location + Gender, data=train, family="binomial")
+summary(forward.select)
+```
+#Create confusion matrix for training set
+```{r echo = FALSE}
+fwd.probs=predict(forward.select,train,type="response")# Make predictions
+fwd.pred=rep(0,nrow(train))
+fwd.pred[fwd.probs > 0.5] = 1# Prediction accuracy
+table(fwd.pred,train$satisfaction) #print confusion matrix
+fwd.train.err <- mean(fwd.pred != train$satisfaction) #calculate accuracy
+fwd.train.err
+```
+
+#Create confusion matrix for test set
+```{r echo = FALSE}
+fwd.probs=predict(forward.select,test,type="response")# Make predictions
+fwd.pred=rep(0,nrow(test))
+fwd.pred[fwd.probs > 0.5] = 1# Prediction accuracy
+table(fwd.pred,test$satisfaction) #print confusion matrix
+fwd.test.err <- mean(fwd.pred != test$satisfaction) #calculate accuracy
+fwd.test.err
+```
+
+#3.Naive Bayes Classifier
+```{r}
+tic("model fitting")
+NBClassifier <- naiveBayes(satisfaction~.,data=train.std) #fit a Naive Bayes classifier
+toc()
+```
+
+```{r}
+nbc.predict <- predict(NBClassifier, train.std, type="class") #predict labels
+table(nbc.predict, train.std$satisfaction) #print confusion matrix
+nbc.train.acc <- mean(nbc.predict == train.std$satisfaction) #calculate accuracy
+nbc.train.acc
+```
+
+```{r}
+nbc.predict <- predict(NBClassifier, test.std, type="class") #predict labels
+table(nbc.predict, test.std$satisfaction) #print confusion matrix
+nbc.test.acc <- mean(nbc.predict == test.std$satisfaction) #calculate accuracy
+nbc.test.acc
+```
+
+#4. Ridge logistic regression
+#Perform ridge logistic regression
+```{r echo = FALSE}
+tic("model fitting")
+cv.out=cv.glmnet(x.train,y.train,family = "binomial",alpha = 0) # use 10 fold cv to select shrinkage parameter.
+toc()
+bestlam_r=cv.out$lambda.min #find the best shrinkage parameter lambda
+bestlam_r
+```
+
+```{r echo = FALSE}
+plot(cv.out)
+```
+#Check the coefficients and number of zero coefficients of the model
+```{r echo = FALSE}
+cat("Coefficients:", as.numeric(coef(cv.out)), fill = TRUE)
+cat("Number of Zero Coefficients",sum(abs(coef(cv.out))<1e-8), fill=TRUE)
+```
+#We find that there is only one predictor, gender, that is not related to the response variable, satisfaction. 
+
+#Creat confusion matrix for training set
+```{r}
+#fit the model
+ridge.mod=glmnet(x.train,y.train,family = "binomial",alpha = 0) #build a ridge regression.
+#predict with the training set
+ridge.pred.train=predict(ridge.mod,s=bestlam_r,newx=x.train,type="class") #make prediction using the best shrinkage parameter
+
+#report mean error rate (fraction of incorrect labels)
+ridge.train.cm <- table(y.train, ridge.pred.train)
+ridge.train.cm
+ridge.train.acc <- mean(ridge.pred.train == train$satisfaction)
+ridge.train.acc
+```
+
+#Create confusion matrix for testing set
+```{r echo = FALSE}
+#predict with the test set
+ridge.pred.test=predict(ridge.mod,s=bestlam_r,newx=x.test,type="class") #make prediction using the best shrinkage parameter
+
+#report mean error rate (fraction of incorrect labels)
+ridge.test.cm <- table(y.test, ridge.pred.test)
+ridge.test.cm
+ridge.test.acc <- mean(ridge.pred.test == test$satisfaction)
+ridge.test.acc
+```
+
+#5. Lasso logistic regression
+#Perform lasso logistic regression
+```{r echo = FALSE}
+set.seed(1)
+tic("model fitting")
+cv.out=cv.glmnet(x.train,y.train,family = "binomial",alpha = 1) # use 10 fold cv to select shrinkage parameter.
+toc()
+bestlam_l=cv.out$lambda.min #find the best shrinkage parameter lambda
+bestlam_l
+
+```
+
+```{r echo = FALSE}
+plot(cv.out)
+```
+#Check the coefficients and number of zero coefficients of the model
+```{r echo = FALSE}
+cat("Coefficients:", as.numeric(coef(cv.out)), fill = TRUE)
+cat("Number of Zero Coefficients",sum(abs(coef(cv.out))<1e-8), fill=TRUE)
+```
+#We find that there are totally 5 predictors, customer type, age, inflight wifi service, gate location, food and drink, and online boarding that are not related to the response variable, satisfaction. 
+
+#Creat confusion matrix for training set
+```{r echo = FALSE}
+#fit the model
+lasso.mod=glmnet(x.train,y.train,family = "binomial",alpha = 1) #build a lasso regression.
+#predicting with the training set
+lasso.pred.train=predict(lasso.mod,s=bestlam_l,newx=x.train,type="class") #making prediction using the best shrinkage parameter
+
+#report mean error rate (fraction of incorrect labels)
+lasso.train.cm <- table(y.train, lasso.pred.train)
+lasso.train.cm
+lasso.train.acc <- mean(lasso.pred.train == train$satisfaction)
+lasso.train.acc
+```
+
+```{r}
+modelroc_lasso <- roc(train$satisfaction,as.numeric(lasso.pred.train))
+plot(modelroc_lasso, print.auc=TRUE, auc.polygon=TRUE, grid=c(0.1, 0.2),
+     grid.col=c("green", "red"), max.auc.polygon=TRUE,
+     auc.polygon.col="skyblue", print.thres=TRUE)
+```
+
+#Create confusion matrix for testing set
+```{r echo = FALSE}
+#predicting with the test set
+lasso.pred.test=predict(lasso.mod,s=bestlam_l,newx=x.test,type="class") #making prediction using the best shrinkage parameter
+
+#report mean error rate (fraction of incorrect labels)
+lasso.test.cm <- table(y.test, lasso.pred.test)
+lasso.test.cm
+lasso.test.acc <- mean(lasso.pred.test == test$satisfaction)
+lasso.test.acc
+```
+
+
+#6. LDA
+```{r}
+tic("model fitting")
+lda.fit=lda(satisfaction ~ .+Inflight.entertainment*Flight.Distance+Food.and.drink*Flight.Distance,data=train.std) 
+toc()
+lda.fit
+```
+```{r}
+lda.pred = predict(lda.fit,newdata=train.std)
+lda.class=lda.pred$class 
+lda.train.cm <-table(lda.class,train.std$satisfaction)
+lda.train.cm
+lda.train.acc<-mean(lda.class == train.std$satisfaction)
+lda.train.acc
+```
+#ROC and AUC
+```{r}
+modelroc_lda <- roc(train.std$satisfaction,as.numeric(lda.class))
+plot(modelroc_lda, print.auc=TRUE, auc.polygon=TRUE, grid=c(0.1, 0.2),
+     grid.col=c("green", "red"), max.auc.polygon=TRUE,
+     auc.polygon.col="skyblue", print.thres=TRUE)
+```
+
+```{r}
+lda.pred_test=predict(lda.fit,newdata=test.std)
+lda.class_test=lda.pred_test$class 
+lda.test.cm <-table(lda.class_test,test.std$satisfaction)
+lda.test.cm
+lda.test.acc<- mean(lda.class_test == test.std$satisfaction)
+lda.test.acc
+```
+
+
+
+#7.QDA
+```{r}
+tic("model fitting")
+qda.fit=qda(satisfaction ~ .+Inflight.entertainment*Flight.Distance+Food.and.drink*Flight.Distance,data=train.std) 
+toc()
+qda.fit
+```
+```{r}
+qda.pred=predict(qda.fit,newdata=train.std)
+qda.class=qda.pred$class
+qda.train.cm <-table(qda.class,train.std$satisfaction)
+qda.train.cm
+qda.train.acc <- mean(qda.class==train.std$satisfaction)
+qda.train.acc
+```
+```{r}
+qda.pred_test=predict(qda.fit,newdata=test.std)
+qda.class_test=qda.pred_test$class 
+qda.test.cm <- table(qda.class_test,test.std$satisfaction)
+qda.test.cm
+qda.test.acc<- mean(qda.class_test==test.std$satisfaction)
+qda.test.acc
+```
+#Try to plot ROC and show AUC
+```{r}
+modelroc_qda <- roc(train.std$satisfaction,as.numeric(qda.class))
+plot(modelroc_qda, print.auc=TRUE, auc.polygon=TRUE, grid=c(0.1, 0.2),
+     grid.col=c("green", "red"), max.auc.polygon=TRUE,
+     auc.polygon.col="skyblue", print.thres=TRUE)
+```
+
+
+
+#8. K-NN algorithm
+
+```{r}
+tic("model fitting")
+trControl=trainControl(method  = "cv",number  = 10) #specific validation type and number of fold using trainControl 
+knn.fit <- caret::train(satisfaction ~ ., #label
+             method     = "knn", #the algorithm you select
+             tuneGrid   = expand.grid(k = 1:10), #grid for hyperparameter
+             preProcess = c("center","scale"), #standardize input data 
+             trControl  = trControl,#using Cross-Viladation
+             metric     = "Accuracy", #metric for cv error
+             data       = train) #specify data
+knn.fit
+toc()
+```
+
+#Creat confusion matrix for training set
+```{r echo = FALSE}
+knn.pred=predict(knn.fit,newdata=train) 
+knn.train.cm <- confusionMatrix(knn.pred, train$satisfaction)
+knn.train.cm
+knn.train.acc <- knn.train.cm$overall[[1]]
+knn.train.acc
+```
+
+#Creat confusion matrix for testing set
+```{r echo = FALSE}
+knn.pred=predict(knn.fit,newdata=test) 
+knn.test.cm <- confusionMatrix(knn.pred, test$satisfaction)
+knn.test.cm
+knn.test.acc <- knn.test.cm$overall[[1]]
+knn.test.acc
+```
+
+
+
+#9. SVM
+#linear kernal
+```{r}
+tune.out <- tune(svm, satisfaction ~ .,data = train.std, kernel="linear",ranges=list(cost=c(1,10)))
+summary(tune.out)
+```
+#Creat confusion matrix for training set
+```{r}
+svc.pred <- predict(tune.out$best.model,train)
+svc.train.cm <- table(svc.pred,train.std$satisfaction)
+svc.train.cm
+glm.train.acc <- mean(svc.pred == train.std$satisfaction) #Calculate Validation accuracy
+glm.train.acc
+```
+
+#Creat confusion matrix for testing set
+```{r}
+svc.pred <- predict(tune.out$best.model,test)
+svc.test.cm <- table(svc.pred,test.std$satisfaction)
+svc.test.cm
+knn.test.acc <- mean(svc.pred == test.std$satisfaction)
+knn.test.acc
+```
+
+#Gaussian kernal
+#Select optimal values for cost C (10) and radial kernel gamma (0.5). We perform the SVM and find the corresponding training error and test error. Smaller C reduces the magnitued of coefficients, leads to higher bias and lower variance. 
+```{r}
+tune.out=tune(svm, satisfaction~.,data=train.std, kernel="radial",ranges=list(cost=c(0.1,1,10),gamma=0.1))
+summary(tune.out)
+```
+
+
+#Creat confusion matrix for training set
+```{r}
+svm.pred <- predict(tune.out$best.model,newdata=train.std)
+svm.train.cm <- confusionMatrix(svm.pred, train.std$satisfaction)
+svm.train.cm
+svm.train.acc <- svm.train.cm$overall[[1]]
+svm.train.acc
+```
+
+#Creat confusion matrix for testing set
+```{r}
+svm.pred <- predict(tune.out$best.model,newdata=test.std)
+svm.test.cm <- confusionMatrix(svm.pred, test.std$satisfaction)
+svm.test.cm
+svm.test.acc <- svm.test.cm$overall[[1]]
+svm.test.acc
+```
+
+
+
+
+
+
+
+
+#10.Decision Tree
+
+#Classification Tree
+```{r}
+tic("Model Fitting")
+class.tree = rpart(formula=train$satisfaction~., data=train, method="class") 
+toc()
+#plotcp(class.tree)
+#printcp(class.tree)
+#summary(class.tree)
+
+```
+```{r}
+rpart.plot(class.tree, box.palette="RdBu", shadow.col="gray", nn=TRUE)
+```
+
+```{r}
+#Accuracy on Training Set
+tic("Model Fitting")
+class.tree_pred = predict(class.tree,train,type="vector")
+class.train.cm <- table(class.tree_pred,train$satisfaction)
+class.train.cm
+class.train.acc <- sum(diag(class.train.cm))/sum(class.train.cm)
+class.train.acc
+```
+
+```{r}
+#Accuracy on Testing Set
+class.tree_pred.test = predict(class.tree,test,type="vector")
+class.test.cm <- table(test$satisfaction,class.tree_pred.test)
+class.test.cm
+class.test.acc <- sum(diag(class.test.cm))/sum(class.test.cm)
+class.test.acc
+```
+#ROC and AUC
+```{r}
+modelroc_classt <- roc(train$satisfaction,as.numeric(class.tree_pred))
+plot(modelroc_classt, print.auc=TRUE, auc.polygon=TRUE, grid=c(0.1, 0.2),
+     grid.col=c("green", "red"), max.auc.polygon=TRUE,
+     auc.polygon.col="skyblue", print.thres=TRUE)
+
+```
+
+
+
+#Classification Tree Prunning
+```{r}
+printcp(class.tree) #Find out how the tree performs
+```
+#From the above mentioned list of cp values, we can select the one having the least cross-validated error and use it to prune the tree.
+```{r}
+class.ptree<- prune(class.tree,
+        cp=class.tree$cptable[which.min(class.tree$cptable[,"xerror"]),"CP"])
+```
+#Accuracy on prunned classification tree
+
+```{r}
+#Accuracy on Training Set
+class.ptree_pred = predict(class.ptree,train,type="vector")
+class.p.train.cm <- table(train$satisfaction,class.ptree_pred)
+class.p.train.acc <- sum(diag(class.p.train.cm))/sum(class.p.train.cm)
+class.p.train.acc
+```
+
+```{r}
+#Accuracy on Test Set
+class.ptree_pred.test = predict(class.ptree,test,type="vector")
+class.p.test.cm <- table(test$satisfaction,class.ptree_pred.test)
+class.p.test.acc <- sum(diag(class.p.test.cm))/sum(class.p.test.cm)
+class.p.test.acc
+```
+
+
+#11.Random Forest
+```{r}
+library("simEd")
+set.seed(1)
+rdf = randomForest(train$satisfaction~., data=train)
+print(rdf)
+importance(rdf)
+```
+```{r}
+# Predicting on training set
+rdf.train <- predict(rdf, train, type = "class")
+rdf.train.cm <-table(rdf.train, train$satisfaction)
+rdf.train.cm
+rdf.train.acc <- sum(diag(rdf.train.cm))/sum(rdf.train.cm)
+rdf.train.acc
+```
+
+#Start Paramter Tunning
+
+```{r}
+library(data.table)
+library(mlr)
+library(h2o)
+#Bagging (Ignore)
+#create a task
+traintask <- makeClassifTask(data = train,target = "satisfaction") 
+testtask <- makeClassifTask(data = test,target = "satisfaction")
+
+#create learner
+bag <- makeLearner("classif.rpart",predict.type = "response")
+bag.lrn <- makeBaggingWrapper(learner = bag,bw.iters = 100,bw.replace = TRUE)
+```
+
+```{r}
+#set 5 fold cross validation
+rdesc <- makeResampleDesc("CV",iters=5L)
+```
+
+```{r}
+#set parallel backend (Windows)
+library(parallelMap)
+library(parallel)
+parallelStartSocket(cpus = detectCores())
+```
+```{r}
+#make randomForest learner
+rf.lrn <- makeLearner("classif.randomForest")
+rf.lrn$par.vals <- list(ntree = 100L, importance=TRUE)
+r <- resample(learner = rf.lrn, task = traintask, resampling = rdesc, measures = list(tpr,fpr,fnr,fpr,mlr::acc), show.info = T)
+#Aggregated Result: tpr.test.mean=0.9797297,fpr.test.mean=0.0640859,fnr.test.mean=0.0202703,fpr.test.mean=0.0640859
+```
+
+```{r}
+getParamSet(rf.lrn)
+
+#set parameter space
+params <- makeParamSet(makeIntegerParam("mtry",lower = 2,upper = 10),makeIntegerParam("nodesize",lower = 10,upper = 50))
+
+#set validation strategy
+rdesc <- makeResampleDesc("CV",iters=5L)
+
+#set optimization technique
+ctrl <- makeTuneControlRandom(maxit = 5L)
+
+#start tuning
+tune <- tuneParams(learner = rf.lrn, task = traintask, resampling = rdesc, measures = list(mlr::acc), par.set = params, control = ctrl, show.info = T)
+#Mapping in parallel: mode = socket; level = mlr.tuneParams; cpus = 8; elements = 5.
+#[Tune] Result: mtry=10; nodesize=21 : acc.test.mean=0.9629102
+```
+
+
+```{r}
+#Using hyperparmeters for modeling
+rf.tree = setHyperPars(rf.lrn,par.vals =tune$x)
+#train a model
+rforest = train(rf.tree,traintask)
+getLearnerModel(rforest)
+```
+
+
+```{r}
+rftrain = predict(rforest,traintask)
+table(rftrain$data$truth,rftrain$data$response)
+mean(rftrain$data$truth==rftrain$data$response)
+```
+
+
+```{r}
+modelroc_rdf <- roc(train$satisfaction,as.numeric(rftrain$data$response))
+plot(modelroc_rdf, print.auc=TRUE, auc.polygon=TRUE, grid=c(0.1, 0.2),
+     grid.col=c("green", "red"), max.auc.polygon=TRUE,
+     auc.polygon.col="skyblue", print.thres=TRUE)
+```
+
+
+```{r}
+rfmodel <- predict(rforest, testtask)
+rfmodel
+```
+
+```{r}
+#Test Accuracy
+table(rfmodel$data$truth,rfmodel$data$response)
+mean(rfmodel$data$truth==rfmodel$data$response)
+```
+
+
+
+#12.XGBoost
+
+#First, we transform the training and testing data sets into xgb.DMatrix objects that are used for fitting the XGBoost model and predicting new outcomes.
+
+```{r}
+library(xgboost)
+# Transform the two data sets into xgb.Matrix
+xgb.train <- xgb.DMatrix(data=as.matrix(x.train),label=as.numeric(y.train)-1)
+xgb.test <- xgb.DMatrix(data=as.matrix(x.test),label=as.numeric(y.test)-1)
+```
+#Then we build our model using default parameters
+```{r}
+params <- list(booster = "gbtree", objective = "binary:logistic", eta=0.3, gamma=0, max_depth=6, min_child_weight=1, subsample=1, colsample_bytree=1)
+```
+#Using the inbuilt xgb.cv function, we calculate the best nround for this model. In addition, this function also returns CV error, which is an estimate of test error.
+```{r}
+xgbcv <- xgb.cv(params = params, data = xgb.train, nrounds = 200, nfold = 5, showsd = T, stratified = T, print_every_n = 10, early_stopping_rounds = 20, maximize = F)
+```
+#We get best iteration = 71. The model returns lowest validation error at the 71th (nround) iteration.
+
+```{r}
+xgb1 <- xgb.train (params = params, data = xgb.train, nrounds = 71, watchlist = list(val=xgb.test,train=xgb.train), print_every_n = 10, early_stop_round = 10, maximize = F , eval_metric = "error")
+xgb.train.pred <- predict (xgb1,xgb.train)
+xgb.train.pred <- ifelse (xgb.train.pred > 0.5,1,0)
+```
+
+```{r}
+#Validation accuracy
+confusionMatrix (table(xgb.train.pred, as.numeric(y.train)-1))
+```
+
+#ROC and AUC
+```{r}
+modelroc_xgb <- roc(train$satisfaction,as.numeric(xgb.train.pred))
+plot(modelroc_xgb, print.auc=TRUE, auc.polygon=TRUE, grid=c(0.1, 0.2),
+     grid.col=c("green", "red"), max.auc.polygon=TRUE,
+     auc.polygon.col="skyblue", print.thres=TRUE)
+```
+
+
+```{r}
+#Testing accuracy
+xgb.test.pred <- predict (xgb1,xgb.test)
+xgb.test.pred <- ifelse (xgb.test.pred > 0.5,1,0)
+confusionMatrix (table(xgb.test.pred, as.numeric(y.test)-1))
+```
+
+
+
+```{r}
+mat <- xgb.importance (feature_names = colnames(x.train),model = xgb1)
+xgb.ggplot.importance (importance_matrix = mat[1:22],xlab = "Relative Importance",rel_to_first = TRUE) + theme(plot.title = element_text(hjust = 0.5))
+```
+
+
